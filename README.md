@@ -22,7 +22,7 @@ Before you begin, ensure you have met the following requirements:
 
 To install the necessary libraries, run the following command:
 ```sh
-pip install tensorflow tensorflow-hub opencv-python numpy
+pip3 install tensorflow tensorflow-hub opencv-python numpy
 ```
 
 ## Usage
