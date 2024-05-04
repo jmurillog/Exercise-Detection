@@ -41,6 +41,19 @@ def detect_keypoints(model, frame):
     keypoints = outputs['output_0'].numpy()
     return keypoints
 
+# Draw keypoints and lines
+def draw_keypoints_and_lines(frame, keypoints):
+    y, x, c = frame.shape
+    shaped = np.squeeze(np.multiply(keypoints, [y, x, 1]))
+
+    for point in shaped:
+        cv2.circle(frame, (int(point[1]), int(point[0])), 5, (0, 255, 0), thickness=-1, lineType=cv2.FILLED)
+
+    for part in BODY_PARTS:
+        start_point = (int(shaped[part[0], 1]), int(shaped[part[0], 0]))
+        end_point = (int(shaped[part[1], 1]), int(shaped[part[1], 0]))
+        cv2.line(frame, start_point, end_point, (255, 0, 0), 3)
+
 # Detect squat and count repetitions
 def detect_squat(keypoints, state):
     left_hip = keypoints[0][0][11][:2]
@@ -95,7 +108,9 @@ try:
         keypoints = detect_keypoints(model, frame)
         count = detect_squat(keypoints, state)  # Updated to include state
 
-        # Draw keypoints and lines as previously defined...
+        keypoints = detect_keypoints(model, frame)
+        draw_keypoints_and_lines(frame, keypoints)
+        count = detect_squat(keypoints, state)
 
         # Display the count on a colored rectangle
         label = f"Squats: {count}"
