@@ -58,6 +58,44 @@ def draw_keypoints_and_lines(frame, keypoints):
         end_point = (int(scaled_keypoints[part[1], 1]), int(scaled_keypoints[part[1], 0]))
         cv2.line(frame, start_point, end_point, (256, 0, 0), 2)
 
+def calculate_angle(point1, point2, point3):
+    """Calculate the angle at point2 formed by line segments point1-point2 and point2-point3."""
+    point1 = np.array(point1)
+    point2 = np.array(point2)
+    point3 = np.array(point3)
+    
+    vector1 = point1 - point2
+    vector2 = point3 - point2
+    
+    cosine_angle = np.dot(vector1, vector2) / (np.linalg.norm(vector1) * np.linalg.norm(vector2))
+    angle = np.arccos(cosine_angle)
+    
+    return np.degrees(angle)
+
+def calculate_vertical_movement(point1, point2):
+    """Calculate the vertical movement between two points."""
+    return abs(point1[0] - point2[0])
+
+def detect_military_press(keypoints, state):
+    """Detect military press repetitions based on the position of the wrists and shoulders."""
+    head = keypoints[0][0][0][:2]
+    left_shoulder = keypoints[0][0][5][:2]
+    right_shoulder = keypoints[0][0][6][:2]
+    left_wrist = keypoints[0][0][9][:2]
+    right_wrist = keypoints[0][0][10][:2]
+
+    wrists_above_head = (left_wrist[0] < head[0]) and (right_wrist[0] < head[0])
+    wrists_below_shoulders = (left_wrist[0] > left_shoulder[0]) and (right_wrist[0] > right_shoulder[0])
+
+    if wrists_above_head and not state['up']:
+        state['up'] = True
+
+    if state['up'] and wrists_below_shoulders:
+        state['count'] += 1
+        state['up'] = False
+
+    return state['count']
+
 def detect_squat(keypoints, state):
     """Detect squat repetitions based on the angle between hip, knee, and ankle keypoints."""
     left_hip = keypoints[0][0][11][:2]
@@ -66,17 +104,6 @@ def detect_squat(keypoints, state):
     right_knee = keypoints[0][0][14][:2]
     left_ankle = keypoints[0][0][15][:2]
     right_ankle = keypoints[0][0][16][:2]
-
-    def calculate_angle(hip, knee, ankle):
-        """Calculate the angle between the hip, knee, and ankle keypoints."""
-        hip = np.array(hip)
-        knee = np.array(knee)
-        ankle = np.array(ankle)
-        thigh = hip - knee
-        shank = ankle - knee
-        cosine_angle = np.dot(thigh, shank) / (np.linalg.norm(thigh) * np.linalg.norm(shank))
-        angle = np.arccos(cosine_angle)
-        return np.degrees(angle)
 
     left_angle = calculate_angle(left_hip, left_knee, left_ankle)
     right_angle = calculate_angle(right_hip, right_knee, right_ankle)
@@ -95,12 +122,25 @@ def detect_squat(keypoints, state):
 
     return state['count']
 
+def display_labels(frame, label_squats, label_press):
+    (label_width_squats, label_height_squats), _ = cv2.getTextSize(label_squats, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
+    cv2.rectangle(frame, (10, 30), (10 + label_width_squats, 30 + label_height_squats + 10), (50, 50, 50), -1)
+    cv2.putText(frame, label_squats, (10, 30 + label_height_squats), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+
+    (label_width_press, label_height_press), _ = cv2.getTextSize(label_press, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
+    cv2.rectangle(frame, (10, 50 + label_height_squats + 10), (10 + label_width_press, 50 + label_height_squats + 10 + label_height_press + 10), (50, 50, 50), -1)
+    cv2.putText(frame, label_press, (10, 50 + label_height_squats + 10 + label_height_press), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+
 cap = cv2.VideoCapture(1)
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
 
-state = {'count': 0, 'down': False}
+state_squats = {'count': 0, 'down': False}
+state_press = {'count': 0, 'up': False}
+
 
 try:
     while True:
@@ -111,21 +151,13 @@ try:
 
         keypoints = detect_keypoints(model, frame)
         draw_keypoints_and_lines(frame, keypoints)
-        count = detect_squat(keypoints, state)
 
-        label = f"Squats: {count}"
-        (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
+        count_squats = detect_squat(keypoints, state_squats)
+        count_press = detect_military_press(keypoints, state_press)
 
-        text_x = 10
-        text_y = 50
-        rect_start_x = 10 - 5
-        rect_start_y = 50 - label_height - 5
-        rect_end_x = 10 + label_width + 5
-        rect_end_y = 50 + 10
-
-        cv2.rectangle(frame, (rect_start_x, rect_start_y), (rect_end_x, rect_end_y), (255, 0, 0), -1)
-        cv2.putText(frame, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
-
+        label_squats = f"Squats: {count_squats}"
+        label_press = f"Press: {count_press}"
+        display_labels(frame, label_squats, label_press)
 
         cv2.imshow('Exercise Detection', frame)
         if cv2.waitKey(1) == ord('q'):
