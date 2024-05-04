@@ -18,44 +18,48 @@ BODY_PARTS = [
     (14, 16) # Right knee to right ankle
 ]
 
-# Load model
 def load_model():
-    model_url = 'https://tfhub.dev/google/movenet/singlepose/lightning/4'
+    """Load the MoveNet model from TensorFlow Hub."""
+    model_url = 'https://tfhub.dev/google/movenet/singlepose/thunder/4'
     model = hub.load(model_url)
     return model.signatures['serving_default']
 
 model = load_model()
 
-# Preprocess image
 def preprocess_image(frame):
+    """Preprocess the frame before feeding it to the model."""
     img = tf.convert_to_tensor(frame, dtype=tf.uint8)
-    img = tf.image.resize_with_pad(img, 192, 192)
+    img = tf.image.resize_with_pad(img, 256, 256)
     img = tf.cast(img, dtype=tf.int32)
     return img
 
-# Detect keypoints
 def detect_keypoints(model, frame):
+    """Detect keypoints on the frame."""
     img = preprocess_image(frame)
     inputs = tf.expand_dims(img, axis=0)
     outputs = model(inputs)
     keypoints = outputs['output_0'].numpy()
     return keypoints
 
-# Draw keypoints and lines
 def draw_keypoints_and_lines(frame, keypoints):
-    y, x, c = frame.shape
-    shaped = np.squeeze(np.multiply(keypoints, [y, x, 1]))
+    """Draw keypoints and lines between them on the frame."""
+    height, width, _ = frame.shape
+    keypoints = np.squeeze(keypoints)[:, :2]
 
-    for point in shaped:
-        cv2.circle(frame, (int(point[1]), int(point[0])), 5, (0, 255, 0), thickness=-1, lineType=cv2.FILLED)
+    scaled_keypoints = keypoints.copy()
+    scaled_keypoints[:, 0] *= height
+    scaled_keypoints[:, 1] *= width
+
+    for point in scaled_keypoints:
+        cv2.circle(frame, (int(point[1]), int(point[0])), 5, (0, 256, 0), -1)
 
     for part in BODY_PARTS:
-        start_point = (int(shaped[part[0], 1]), int(shaped[part[0], 0]))
-        end_point = (int(shaped[part[1], 1]), int(shaped[part[1], 0]))
-        cv2.line(frame, start_point, end_point, (255, 0, 0), 3)
+        start_point = (int(scaled_keypoints[part[0], 1]), int(scaled_keypoints[part[0], 0]))
+        end_point = (int(scaled_keypoints[part[1], 1]), int(scaled_keypoints[part[1], 0]))
+        cv2.line(frame, start_point, end_point, (256, 0, 0), 2)
 
-# Detect squat and count repetitions
 def detect_squat(keypoints, state):
+    """Detect squat repetitions based on the angle between hip, knee, and ankle keypoints."""
     left_hip = keypoints[0][0][11][:2]
     right_hip = keypoints[0][0][12][:2]
     left_knee = keypoints[0][0][13][:2]
@@ -64,6 +68,7 @@ def detect_squat(keypoints, state):
     right_ankle = keypoints[0][0][16][:2]
 
     def calculate_angle(hip, knee, ankle):
+        """Calculate the angle between the hip, knee, and ankle keypoints."""
         hip = np.array(hip)
         knee = np.array(knee)
         ankle = np.array(ankle)
@@ -90,13 +95,12 @@ def detect_squat(keypoints, state):
 
     return state['count']
 
-# Open webcam
 cap = cv2.VideoCapture(1)
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
 
-state = {'count': 0, 'down': False}  # State for counting repetitions
+state = {'count': 0, 'down': False}
 
 try:
     while True:
@@ -106,17 +110,22 @@ try:
             break
 
         keypoints = detect_keypoints(model, frame)
-        count = detect_squat(keypoints, state)  # Updated to include state
-
-        keypoints = detect_keypoints(model, frame)
         draw_keypoints_and_lines(frame, keypoints)
         count = detect_squat(keypoints, state)
 
-        # Display the count on a colored rectangle
         label = f"Squats: {count}"
         (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
-        cv2.rectangle(frame, (10, 30), (10 + label_width, 30 - label_height - 10), (255, 0, 0), -1)
-        cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+
+        text_x = 10
+        text_y = 50
+        rect_start_x = 10 - 5
+        rect_start_y = 50 - label_height - 5
+        rect_end_x = 10 + label_width + 5
+        rect_end_y = 50 + 10
+
+        cv2.rectangle(frame, (rect_start_x, rect_start_y), (rect_end_x, rect_end_y), (255, 0, 0), -1)
+        cv2.putText(frame, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+
 
         cv2.imshow('Exercise Detection', frame)
         if cv2.waitKey(1) == ord('q'):
