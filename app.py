@@ -2,6 +2,7 @@ import cv2
 import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
+import os
 
 BODY_PARTS = [
     (5, 7),  # Left shoulder to left elbow
@@ -17,6 +18,42 @@ BODY_PARTS = [
     (12, 14),# Right hip to right knee
     (14, 16) # Right knee to right ankle
 ]
+
+# Load known faces
+face_recognizer = cv2.face.LBPHFaceRecognizer_create()
+
+
+faces = []
+labels = []
+names = []
+for person_id, person_name in enumerate(os.listdir("known_faces")):
+    for image_name in os.listdir(f"known_faces/{person_name}"):
+        image = cv2.imread(f"known_faces/{person_name}/{image_name}", cv2.IMREAD_GRAYSCALE)
+        image = cv2.resize(image, (200, 200))
+        faces.append(image)
+        labels.append(person_id)
+    names.append(person_name)
+
+
+face_recognizer.train(np.array(faces), np.array(labels))
+
+def recognize_faces(frame):
+    """Recognize faces in the frame."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    face_locations = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    face_names = []
+    for (x, y, w, h) in face_locations:
+        face = gray[y:y+h, x:x+w]
+        label, confidence = face_recognizer.predict(face)
+        if confidence > 95:
+            name = names[label]
+        else:
+            name = "Unknown"
+        face_names.append(name)
+
+    return face_locations, face_names
 
 def load_model():
     """Load the MoveNet model from TensorFlow Hub."""
@@ -132,8 +169,7 @@ def display_labels(frame, label_squats, label_press):
     cv2.putText(frame, label_press, (10, 50 + label_height_squats + 10 + label_height_press), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
 
 
-
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
@@ -149,15 +185,21 @@ try:
             print("Can't receive frame (stream end?). Exiting ...")
             break
 
+        face_locations, face_names = recognize_faces(frame)
         keypoints = detect_keypoints(model, frame)
         draw_keypoints_and_lines(frame, keypoints)
 
-        count_squats = detect_squat(keypoints, state_squats)
-        count_press = detect_military_press(keypoints, state_press)
+        for (x, y, w, h), name in zip(face_locations, face_names):
+            if name != "Unknown":
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
-        label_squats = f"Squats: {count_squats}"
-        label_press = f"Press: {count_press}"
-        display_labels(frame, label_squats, label_press)
+                count_squats = detect_squat(keypoints, state_squats)
+                count_press = detect_military_press(keypoints, state_press)
+
+                label_squats = f"{name}: Squats: {count_squats}"
+                label_press = f"{name}: Press: {count_press}"
+                display_labels(frame, label_squats, label_press)
 
         cv2.imshow('Exercise Detection', frame)
         if cv2.waitKey(1) == ord('q'):
