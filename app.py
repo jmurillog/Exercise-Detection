@@ -3,6 +3,7 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
 import os
+import csv
 
 BODY_PARTS = [
     (5, 7),  # Left shoulder to left elbow
@@ -25,35 +26,40 @@ face_recognizer = cv2.face.LBPHFaceRecognizer_create()
 
 faces = []
 labels = []
-names = []
+names = {}
 for person_id, person_name in enumerate(os.listdir("known_faces")):
-    for image_name in os.listdir(f"known_faces/{person_name}"):
-        image = cv2.imread(f"known_faces/{person_name}/{image_name}", cv2.IMREAD_GRAYSCALE)
-        image = cv2.resize(image, (200, 200))
-        faces.append(image)
-        labels.append(person_id)
-    names.append(person_name)
+    if os.path.isdir(os.path.join("known_faces", person_name)):
+        for image_name in os.listdir(f"known_faces/{person_name}"):
+            image = cv2.imread(f"known_faces/{person_name}/{image_name}", cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                print(f"Could not read image: known_faces/{person_name}/{image_name}")
+                continue
+            image = cv2.resize(image, (200, 200))
+            faces.append(image)
+            labels.append(person_id)
+        names[person_id] = person_name
 
 
-face_recognizer.train(np.array(faces), np.array(labels))
+face_recognizer.train(faces, np.array(labels))
 
-def recognize_faces(frame):
+def recognize_faces(frame, confidence_threshold=100):  # Adjusted threshold
     """Recognize faces in the frame."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    face_locations = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    face_locations = face_cascade.detectMultiScale(gray, scaleFactor=1.04, minNeighbors=4, minSize=(30, 30))
 
     face_names = []
     for (x, y, w, h) in face_locations:
         face = gray[y:y+h, x:x+w]
         label, confidence = face_recognizer.predict(face)
-        if confidence > 95:
+        if confidence < confidence_threshold:
             name = names[label]
         else:
             name = "Unknown"
         face_names.append(name)
 
     return face_locations, face_names
+
 
 def load_model():
     """Load the MoveNet model from TensorFlow Hub."""
@@ -159,17 +165,41 @@ def detect_squat(keypoints, state):
 
     return state['count']
 
-def display_labels(frame, label_squats, label_press):
-    (label_width_squats, label_height_squats), _ = cv2.getTextSize(label_squats, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
-    cv2.rectangle(frame, (10, 30), (10 + label_width_squats, 30 + label_height_squats + 10), (50, 50, 50), -1)
-    cv2.putText(frame, label_squats, (10, 30 + label_height_squats), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+def display_labels(frame, exercise_records):
+    base_x, base_y = 10, 10  # Starting coordinates for the first label
+    label_height = 60  # Height of each label box to fit text
 
-    (label_width_press, label_height_press), _ = cv2.getTextSize(label_press, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1)
-    cv2.rectangle(frame, (10, 50 + label_height_squats + 10), (10 + label_width_press, 50 + label_height_squats + 10 + label_height_press + 10), (50, 50, 50), -1)
-    cv2.putText(frame, label_press, (10, 50 + label_height_squats + 10 + label_height_press), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
+    # Define a list of colors for different individuals
+    colors = [(200, 50, 50), (50, 200, 50), (50, 50, 200), (200, 200, 50), (50, 200, 200)]
+
+    for index, (name, records) in enumerate(exercise_records.items()):
+        # Position for the current label, shift down based on how many are already displayed
+        current_y = base_y + index * (label_height + 10)
+        label_text = f"{name}: Squats {records['Squats']}, Press {records['Press']}"
+
+        # Determine the width of the box based on text width
+        (text_width, text_height), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        cv2.rectangle(frame, (base_x, current_y), (base_x + text_width + 10, current_y + label_height), colors[index % len(colors)], -1)
+        cv2.putText(frame, label_text, (base_x + 5, current_y + text_height + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+
+def draw_faces_and_labels(frame, face_locations, face_names):
+    """Draw rectangles and labels around recognized faces."""
+    for (x, y, w, h), name in zip(face_locations, face_names):
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)  # Draw rectangle around the face
+        cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)  # Put the name above the rectangle
+
+def write_results_to_csv(exercise_records):
+    with open('results.csv', 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Person', 'Exercise', 'Count'])  # Write the header row
+        for person, records in exercise_records.items():
+            for exercise, count in records.items():
+                writer.writerow([person, exercise, count])  # Write the exercise data
 
 
-cap = cv2.VideoCapture(0)
+
+
+cap = cv2.VideoCapture(1)
 if not cap.isOpened():
     print("Cannot open camera")
     exit()
@@ -177,6 +207,7 @@ if not cap.isOpened():
 state_squats = {'count': 0, 'down': False}
 state_press = {'count': 0, 'up': False}
 
+exercise_records = {}
 
 try:
     while True:
@@ -185,21 +216,23 @@ try:
             print("Can't receive frame (stream end?). Exiting ...")
             break
 
-        face_locations, face_names = recognize_faces(frame)
-        keypoints = detect_keypoints(model, frame)
-        draw_keypoints_and_lines(frame, keypoints)
+        face_locations, face_names = recognize_faces(frame)  # Recognize faces
+        keypoints = detect_keypoints(model, frame)  # Detect keypoints
+        draw_keypoints_and_lines(frame, keypoints)  # Draw keypoints and lines
 
-        for (x, y, w, h), name in zip(face_locations, face_names):
-            if name != "Unknown":
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+        draw_faces_and_labels(frame, face_locations, face_names)  # Draw faces and labels
 
-                count_squats = detect_squat(keypoints, state_squats)
-                count_press = detect_military_press(keypoints, state_press)
+        # Update and manage exercise records
+        for name in face_names:
+            if name not in exercise_records:
+                exercise_records[name] = {'Squats': 0, 'Press': 0}
+                state_squats[name] = {'count': 0, 'down': False}  # Ensure states are initialized for new faces
+                state_press[name] = {'count': 0, 'up': False}
+            exercise_records[name]['Squats'] = detect_squat(keypoints, state_squats[name])  # Update squat count
+            exercise_records[name]['Press'] = detect_military_press(keypoints, state_press[name])  # Update press count
 
-                label_squats = f"{name}: Squats: {count_squats}"
-                label_press = f"{name}: Press: {count_press}"
-                display_labels(frame, label_squats, label_press)
+        # Display the updated labels in the top left corner
+        display_labels(frame, exercise_records)
 
         cv2.imshow('Exercise Detection', frame)
         if cv2.waitKey(1) == ord('q'):
@@ -207,3 +240,12 @@ try:
 finally:
     cap.release()
     cv2.destroyAllWindows()
+
+    # Print final exercise counts
+    print("Exercise session results:\n")
+    for person, records in exercise_records.items():
+        print(f"\n{person}:")
+        for exercise, count in records.items():
+            print(f" - {exercise}: {count}")
+    # Place this at the end of your main try block or after the session ends
+    write_results_to_csv(exercise_records)
