@@ -7,6 +7,7 @@ This application utilizes computer vision and machine learning to detect and cou
 - Real-time squat detection and counting
 - Visualization of detected keypoints and skeletal structure on the video feed
 - Utilizes MoveNet from TensorFlow Hub for efficient and accurate pose estimation
+- Face recognition and exercise mapping
 
 ## Prerequisites
 
